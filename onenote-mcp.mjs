@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 
-import { McpServer } from './typescript-sdk/dist/esm/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@microsoft/microsoft-graph-client';
-import { StdioServerTransport } from './typescript-sdk/dist/esm/server/stdio.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
-import { DeviceCodeCredential } from '@azure/identity';
 import fetch from 'node-fetch';
 
 // Load environment variables
@@ -60,89 +59,66 @@ if (!accessToken && process.env.GRAPH_ACCESS_TOKEN) {
 }
 
 let graphClient = null;
+let pendingDeviceCode = null; // { device_code, interval, expires_in, startTime }
 
-// Client ID for Microsoft Graph API access
-const clientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e'; // Microsoft Graph Explorer client ID
-const scopes = ['Notes.Read.All', 'Notes.ReadWrite.All', 'User.Read'];
+// Client ID — Microsoft Graph Explorer (public client, pre-consented for all Graph scopes)
+const clientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e';
+// Use 'consumers' tenant so personal Microsoft accounts (MSA) can authenticate
+const TENANT = 'consumers';
+// Personal Microsoft accounts (MSA): OneNote requires the non-".All" scope.
+// The ".All" variants (Notes.ReadWrite.All) are valid only for work/school accounts.
+const SCOPES = 'Notes.ReadWrite Notes.Create User.Read offline_access';
 
-// Function to ensure Graph client is created
+function buildGraphClient(token) {
+  return Client.initWithMiddleware({
+    authProvider: { getAccessToken: async () => token }
+  });
+}
+
 async function ensureGraphClient() {
-  if (!graphClient) {
-    // Read token from file if it exists
-    try {
-      if (fs.existsSync(tokenFilePath)) {
-        const tokenData = fs.readFileSync(tokenFilePath, 'utf8');
-        try {
-          // Try to parse as JSON first (new format)
-          const parsedToken = JSON.parse(tokenData);
-          accessToken = parsedToken.token;
-        } catch (parseError) {
-          // Fall back to using the raw token (old format)
-          accessToken = tokenData;
-        }
-      }
-    } catch (error) {
-      console.error("Error reading token file:", error);
-    }
+  if (graphClient) return graphClient;
 
-    if (!accessToken) {
-      throw new Error("Access token not found. Please save access token first.");
-    }
-
-    // Create Microsoft Graph client
-    graphClient = Client.init({
-      authProvider: (done) => {
-        done(null, accessToken);
-      }
-    });
+  if (!accessToken) {
+    throw new Error("Not authenticated. Call the authenticate tool first.");
   }
+  graphClient = buildGraphClient(accessToken);
   return graphClient;
 }
 
-// Create graph client with device code auth or access token
-async function createGraphClient() {
-  if (accessToken) {
-    // Use access token if available
-    graphClient = Client.initWithMiddleware({
-      authProvider: {
-        getAccessToken: async () => {
-          return accessToken;
-        }
-      }
-    });
-    return { type: 'token', client: graphClient };
-  } else {
-    // Use device code flow
-    const credential = new DeviceCodeCredential({
-      clientId: clientId,
-      userPromptCallback: (info) => {
-        // This will be shown to the user with the URL and code
-        console.error('\n' + info.message);
-      }
-    });
-
-    try {
-      // Get an access token using device code flow
-      const tokenResponse = await credential.getToken(scopes);
-      
-      // Save the token for future use
-      accessToken = tokenResponse.token;
-      fs.writeFileSync(tokenFilePath, JSON.stringify({ token: accessToken }));
-      
-      // Initialize Graph client with the token
-      graphClient = Client.initWithMiddleware({
-        authProvider: {
-          getAccessToken: async () => {
-            return accessToken;
-          }
-        }
-      });
-      
-      return { type: 'device_code', client: graphClient };
-    } catch (error) {
-      console.error('Authentication error:', error);
-      throw new Error(`Authentication failed: ${error.message}`);
+// Start device code flow; returns { user_code, verification_uri, message, device_code, interval }
+async function startDeviceCodeFlow() {
+  const res = await fetch(
+    `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/devicecode`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: clientId, scope: SCOPES }).toString(),
     }
+  );
+  const data = await res.json();
+  if (data.error) throw new Error(`${data.error}: ${data.error_description}`);
+  return data;
+}
+
+// Poll for token after user completes device code sign-in
+async function pollForToken(deviceCode, intervalSecs) {
+  const body = new URLSearchParams({
+    grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+    client_id: clientId,
+    device_code: deviceCode,
+  }).toString();
+
+  while (true) {
+    await new Promise(r => setTimeout(r, intervalSecs * 1000));
+    const res = await fetch(
+      `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`,
+      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }
+    );
+    const data = await res.json();
+    if (data.access_token) return data.access_token;
+    if (data.error === 'authorization_pending') continue;
+    if (data.error === 'slow_down') { intervalSecs += 5; continue; }
+    throw new Error(`${data.error}: ${data.error_description}`);
   }
 }
 
@@ -152,26 +128,54 @@ server.tool(
   "Start the authentication flow with Microsoft Graph",
   async () => {
     try {
-      const result = await createGraphClient();
-      if (result.type === 'device_code') {
-        return { 
-          content: [
-            {
-              type: "text",
-              text: "Authentication started. Please check the console for the URL and code."
-            }
-          ]
-        };
-      } else {
-        return { 
-          content: [
-            {
-              type: "text",
-              text: "Already authenticated with an access token."
-            }
-          ]
-        };
+      // If already authenticated, confirm
+      if (accessToken) {
+        return { content: [{ type: "text", text: "Already authenticated with an access token." }] };
       }
+
+      // If a device code flow is in progress, poll once to check if user completed sign-in
+      if (pendingDeviceCode) {
+        const { device_code, interval } = pendingDeviceCode;
+        const res = await fetch(
+          `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+              client_id: clientId,
+              device_code: device_code,
+            }).toString(),
+          }
+        );
+        const data = await res.json();
+
+        if (data.access_token) {
+          accessToken = data.access_token;
+          fs.writeFileSync(tokenFilePath, JSON.stringify({ token: accessToken }));
+          graphClient = buildGraphClient(accessToken);
+          pendingDeviceCode = null;
+          return { content: [{ type: "text", text: "Authentication complete. You are now signed in." }] };
+        }
+
+        if (data.error === 'authorization_pending' || data.error === 'slow_down') {
+          return { content: [{ type: "text", text: "Authentication in progress. Complete the sign-in in your browser, then call authenticate again to confirm." }] };
+        }
+
+        // Flow expired or errored — reset and start fresh
+        pendingDeviceCode = null;
+      }
+
+      // Start a new device code flow
+      const flowData = await startDeviceCodeFlow();
+      pendingDeviceCode = { device_code: flowData.device_code, interval: flowData.interval };
+
+      return {
+        content: [{
+          type: "text",
+          text: flowData.message + "\n\nAfter completing sign-in, call the authenticate tool again to confirm."
+        }]
+      };
     } catch (error) {
       console.error("Error in authentication:", error);
       throw new Error(`Authentication failed: ${error.message}`);
