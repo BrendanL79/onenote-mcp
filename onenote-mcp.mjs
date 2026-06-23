@@ -63,10 +63,15 @@ let pendingDeviceCode = null; // { device_code, interval, expires_in, startTime 
 
 // Client ID — Microsoft Graph Explorer (public client, pre-consented for all Graph scopes)
 const clientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e';
-// Use 'consumers' tenant so personal Microsoft accounts (MSA) can authenticate
-const TENANT = 'consumers';
-// Personal Microsoft accounts (MSA): OneNote requires the non-".All" scope.
-// The ".All" variants (Notes.ReadWrite.All) are valid only for work/school accounts.
+// 'common' accepts BOTH personal Microsoft accounts (MSA) and work/school (Azure AD) accounts.
+// Override with GRAPH_TENANT for a locked single-tenant flow:
+//   'consumers'     -> personal MSA only
+//   'organizations' -> work/school only
+//   '<tenant-id>'   -> one specific org
+const TENANT = process.env.GRAPH_TENANT || 'common';
+// Non-".All" delegated scopes work for both personal and work/school accounts.
+// (Personal MSA cannot be granted the ".All" variants at all; ".All" only adds
+// access to notebooks the signed-in user does not own.)
 const SCOPES = 'Notes.ReadWrite Notes.Create User.Read offline_access';
 
 function buildGraphClient(token) {
