@@ -79,7 +79,7 @@ The first time you ask about OneNote, the AI will guide you through the authenti
 
 ## Features
 
-- Authentication with Microsoft OneNote using device code flow (no Azure setup needed)
+- Authentication with Microsoft OneNote using device code flow (no Azure setup needed), supporting both personal and work/school accounts
 - List all notebooks, sections, and pages
 - Create new pages with HTML content
 - Read complete page content, including HTML formatting
@@ -150,6 +150,40 @@ Once the server is running, you can authenticate directly through your AI assist
 3. Go to the URL, enter the code, and sign in with your Microsoft account
 
 4. After successful authentication, you can start using OneNote with your AI assistant
+
+### Account Types and Tenant Configuration
+
+By default the server authenticates against the Microsoft `common` tenant, which
+accepts **both** personal Microsoft accounts (MSA) and work/school (Azure AD)
+accounts — no configuration needed for the typical case.
+
+If you need to restrict sign-in to a specific tenant, set the `GRAPH_TENANT`
+environment variable:
+
+| `GRAPH_TENANT` value | Accounts allowed |
+|----------------------|------------------|
+| `common` (default)   | Personal **and** work/school |
+| `consumers`          | Personal Microsoft accounts only |
+| `organizations`      | Work/school accounts only |
+| `<tenant-id>`        | A single specific organization |
+
+Set it in your MCP server config's `env` block, for example:
+
+```json
+{
+  "mcpServers": {
+    "onenote": {
+      "command": "node",
+      "args": ["/absolute/path/to/your/onenote-mcp.mjs"],
+      "env": { "GRAPH_TENANT": "organizations" }
+    }
+  }
+}
+```
+
+> Note: some organizations disable user consent for third-party apps, requiring
+> an administrator to approve access. This is a tenant policy and cannot be
+> changed from this server.
 
 ## Available MCP Tools
 
