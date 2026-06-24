@@ -132,6 +132,7 @@ export async function fetchAllPages(graphClient, basePath, top) {
 server.tool(
   "authenticate",
   "Start the authentication flow with Microsoft Graph",
+  {},
   async () => {
     try {
       // If already authenticated, confirm

@@ -89,6 +89,15 @@ describe('searchPages tool schema', () => {
   });
 });
 
+describe('authenticate tool schema', () => {
+  it('is registered with an explicit (empty) input schema', async () => {
+    const mod = await import(`../onenote-mcp.mjs?t=${Date.now()}`);
+    const tools = mod.server._registeredTools;
+    const tool = tools.authenticate;
+    assert.ok(tool?.inputSchema, 'authenticate should have an explicit inputSchema');
+  });
+});
+
 describe('pagination schema params', () => {
   it('listPages advertises optional top and skip params', async () => {
     const mod = await import(`../onenote-mcp.mjs?t=${Date.now()}`);
