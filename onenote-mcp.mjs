@@ -112,6 +112,22 @@ async function pollForToken(deviceCode, intervalSecs) {
   }
 }
 
+export async function fetchAllPages(graphClient, basePath, top) {
+  const all = [];
+  let skip = 0;
+  while (true) {
+    const response = await graphClient
+      .api(basePath)
+      .query({ $top: top, $skip: skip })
+      .get();
+    if (!response.value || response.value.length === 0) break;
+    all.push(...response.value);
+    if (response.value.length < top) break;
+    skip += top;
+  }
+  return all;
+}
+
 // Tool for starting authentication flow
 server.tool(
   "authenticate",
@@ -272,14 +288,28 @@ server.tool(
 server.tool(
   "listPages",
   "List all pages in a section",
-  { sectionId: z.string().describe("The ID of the section to list pages from") },
-  async ({ sectionId }) => {
+  {
+    sectionId: z.string().describe("The ID of the section to list pages from"),
+    top: z.number().int().min(1).max(100).optional().default(100).describe("Page size for pagination (max 100)"),
+    skip: z.number().int().min(0).optional().default(0).describe("Number of items to skip"),
+  },
+  async ({ sectionId, top, skip }) => {
     try {
       await ensureGraphClient();
-      const response = await graphClient.api(`/me/onenote/sections/${sectionId}/pages`).get();
+      const basePath = `/me/onenote/sections/${sectionId}/pages`;
+      let pages;
+      if (skip === 0 && top === 100) {
+        pages = await fetchAllPages(graphClient, basePath, 100);
+      } else {
+        const response = await graphClient
+          .api(basePath)
+          .query({ $top: top, $skip: skip })
+          .get();
+        pages = response.value;
+      }
       return {
         content: [
-          { type: "text", text: JSON.stringify(response.value) }
+          { type: "text", text: JSON.stringify(pages) }
         ]
       };
     } catch (error) {
@@ -355,20 +385,34 @@ server.tool(
 server.tool(
   "searchPages",
   "Search for pages across notebooks by title",
-  { query: z.string().describe("Search term to filter pages by title") },
-  async ({ query }) => {
+  {
+    query: z.string().describe("Search term to filter pages by title"),
+    top: z.number().int().min(1).max(100).optional().default(100).describe("Page size for pagination (max 100)"),
+    skip: z.number().int().min(0).optional().default(0).describe("Number of items to skip"),
+  },
+  async ({ query, top, skip }) => {
     try {
       await ensureGraphClient();
-      const response = await graphClient.api(`/me/onenote/pages`).get();
+      const basePath = `/me/onenote/pages`;
+      let allPages;
+      if (skip === 0 && top === 100) {
+        allPages = await fetchAllPages(graphClient, basePath, 100);
+      } else {
+        const response = await graphClient
+          .api(basePath)
+          .query({ $top: top, $skip: skip })
+          .get();
+        allPages = response.value;
+      }
       if (!query || query.length === 0) {
         return {
           content: [
-            { type: "text", text: JSON.stringify(response.value) }
+            { type: "text", text: JSON.stringify(allPages) }
           ]
         };
       }
       const searchTerm = query.toLowerCase();
-      const filteredPages = response.value.filter(page =>
+      const filteredPages = allPages.filter(page =>
         page.title && page.title.toLowerCase().includes(searchTerm)
       );
       return {

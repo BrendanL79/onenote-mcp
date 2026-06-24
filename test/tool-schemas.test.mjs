@@ -88,3 +88,21 @@ describe('searchPages tool schema', () => {
     assert.ok(props?.query, 'schema should include query');
   });
 });
+
+describe('pagination schema params', () => {
+  it('listPages advertises optional top and skip params', async () => {
+    const mod = await import(`../onenote-mcp.mjs?t=${Date.now()}`);
+    const tool = mod.server._registeredTools.listPages;
+    const props = tool.inputSchema.def.shape;
+    assert.ok(props.top, 'listPages should include top param');
+    assert.ok(props.skip, 'listPages should include skip param');
+  });
+
+  it('searchPages advertises optional top and skip params', async () => {
+    const mod = await import(`../onenote-mcp.mjs?t=${Date.now()}`);
+    const tool = mod.server._registeredTools.searchPages;
+    const props = tool.inputSchema.def.shape;
+    assert.ok(props.top, 'searchPages should include top param');
+    assert.ok(props.skip, 'searchPages should include skip param');
+  });
+});
