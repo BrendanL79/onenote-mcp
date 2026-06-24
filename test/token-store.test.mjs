@@ -83,3 +83,78 @@ describe('clearToken', () => {
     assert.doesNotThrow(() => clearToken());
   });
 });
+
+describe('isTokenExpired', () => {
+  it('returns true when expires_at is missing', async () => {
+    const { saveToken, isTokenExpired } = await importTokenStore();
+    saveToken({ token: 'abc' });
+    assert.equal(isTokenExpired(), true);
+  });
+
+  it('returns true when expires_at is in the past', async () => {
+    const { saveToken, isTokenExpired } = await importTokenStore();
+    saveToken({ token: 'abc', expires_in: -1 });
+    assert.equal(isTokenExpired(), true);
+  });
+
+  it('returns false when expires_at is in the future (beyond 5-min skew)', async () => {
+    const { saveToken, isTokenExpired } = await importTokenStore();
+    saveToken({ token: 'abc', expires_in: 600 });
+    assert.equal(isTokenExpired(), false);
+  });
+
+  it('returns true when expires_at is within 5-min skew window', async () => {
+    const { saveToken, isTokenExpired } = await importTokenStore();
+    saveToken({ token: 'abc', expires_in: 120 });
+    assert.equal(isTokenExpired(), true);
+  });
+});
+
+describe('refreshAccessToken', () => {
+  it('returns null when no refresh_token is stored', async () => {
+    const { saveToken, refreshAccessToken } = await importTokenStore();
+    saveToken({ token: 'abc' });
+    const result = await refreshAccessToken();
+    assert.equal(result, null);
+  });
+
+  it('returns null when no token file exists', async () => {
+    const { refreshAccessToken } = await importTokenStore();
+    const result = await refreshAccessToken();
+    assert.equal(result, null);
+  });
+
+  it('calls the token endpoint and saves the new token', async () => {
+    const { saveToken, refreshAccessToken, loadToken, setTokenEndpointConfig } = await importTokenStore();
+
+    let capturedBody;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      capturedBody = opts.body;
+      return {
+        ok: true,
+        json: async () => ({
+          access_token: 'new-access',
+          refresh_token: 'new-refresh',
+          expires_in: 3600,
+        }),
+      };
+    };
+    try {
+      setTokenEndpointConfig({ clientId: 'test-client', tenant: 'common', scopes: 'test-scope' });
+      saveToken({ token: 'old-access', refresh_token: 'old-refresh', expires_in: -1 });
+      const result = await refreshAccessToken();
+      assert.equal(result.token, 'new-access');
+      assert.equal(result.refresh_token, 'new-refresh');
+      assert.ok(result.expires_at > Date.now());
+      const loaded = loadToken();
+      assert.equal(loaded.token, 'new-access');
+      const params = new URLSearchParams(capturedBody);
+      assert.equal(params.get('grant_type'), 'refresh_token');
+      assert.equal(params.get('client_id'), 'test-client');
+      assert.equal(params.get('refresh_token'), 'old-refresh');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
