@@ -206,17 +206,14 @@ server.tool(
 server.tool(
   "listNotebooks",
   "List all OneNote notebooks",
-  async (params) => {
+  {},
+  async () => {
     try {
       await ensureGraphClient();
       const response = await graphClient.api("/me/onenote/notebooks").get();
-      // Return content as an array of text items
       return {
         content: [
-          {
-            type: "text",
-            text: JSON.stringify(response.value)
-          }
+          { type: "text", text: JSON.stringify(response.value) }
         ]
       };
     } catch (error) {
@@ -230,16 +227,14 @@ server.tool(
 server.tool(
   "getNotebook",
   "Get details of a specific notebook",
-  async (params) => {
+  { notebookId: z.string().describe("The ID of the notebook to retrieve") },
+  async ({ notebookId }) => {
     try {
       await ensureGraphClient();
-      const response = await graphClient.api(`/me/onenote/notebooks`).get();
-      return { 
+      const response = await graphClient.api(`/me/onenote/notebooks/${notebookId}`).get();
+      return {
         content: [
-          {
-            type: "text",
-            text: JSON.stringify(response.value[0])
-          }
+          { type: "text", text: JSON.stringify(response) }
         ]
       };
     } catch (error) {
@@ -252,17 +247,18 @@ server.tool(
 // Tool for listing sections in a notebook
 server.tool(
   "listSections",
-  "List all sections in a notebook",
-  async (params) => {
+  "List all sections, optionally scoped to a notebook",
+  { notebookId: z.string().optional().describe("Optional notebook ID to scope sections to a specific notebook") },
+  async ({ notebookId }) => {
     try {
       await ensureGraphClient();
-      const response = await graphClient.api(`/me/onenote/sections`).get();
-      return { 
+      const api = notebookId
+        ? graphClient.api(`/me/onenote/notebooks/${notebookId}/sections`)
+        : graphClient.api(`/me/onenote/sections`);
+      const response = await api.get();
+      return {
         content: [
-          {
-            type: "text",
-            text: JSON.stringify(response.value)
-          }
+          { type: "text", text: JSON.stringify(response.value) }
         ]
       };
     } catch (error) {
