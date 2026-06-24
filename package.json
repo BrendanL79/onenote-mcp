@@ -10,7 +10,8 @@
     "list-notebooks": "node simple-onenote.js",
     "list-sections": "node list-sections.js",
     "list-pages": "node list-pages.js",
-    "create-page": "node create-page.js"
+    "create-page": "node create-page.js",
+    "test": "node --test test/*.mjs"
   },
   "dependencies": {
     "@azure/identity": "^4.13.1",
