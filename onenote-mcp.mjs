@@ -292,102 +292,29 @@ server.tool(
 // Tool for getting the content of a page
 server.tool(
   "getPage",
-  "Get the content of a page",
-  async (params) => {
+  "Get the content of a page by its ID",
+  { pageId: z.string().describe("The ID of the page to retrieve") },
+  async ({ pageId }) => {
     try {
-      console.error("GetPage called with params:", params);
       await ensureGraphClient();
-      
-      // First, list all pages to find the one we want
-      const pagesResponse = await graphClient.api('/me/onenote/pages').get();
-      console.error("Got", pagesResponse.value.length, "pages");
-      
-      let targetPage;
-      
-      // If a page ID is provided, use it to find the page
-      if (params.random_string && params.random_string.length > 0) {
-        const pageId = params.random_string;
-        console.error("Looking for page with ID:", pageId);
-        
-        // Look for exact match first
-        targetPage = pagesResponse.value.find(p => p.id === pageId);
-        
-        // If no exact match, try matching by title
-        if (!targetPage) {
-          console.error("No exact match, trying title search");
-          targetPage = pagesResponse.value.find(p => 
-            p.title && p.title.toLowerCase().includes(params.random_string.toLowerCase())
-          );
-        }
-        
-        // If still no match, try partial ID match
-        if (!targetPage) {
-          console.error("No title match, trying partial ID match");
-          targetPage = pagesResponse.value.find(p => 
-            p.id.includes(pageId) || pageId.includes(p.id)
-          );
-        }
-      } else {
-        // If no ID provided, use the first page
-        console.error("No ID provided, using first page");
-        targetPage = pagesResponse.value[0];
+      const url = `https://graph.microsoft.com/v1.0/me/onenote/pages/${pageId}/content`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status} ${response.statusText}`);
       }
-      
-      if (!targetPage) {
-        throw new Error("Page not found");
-      }
-      
-      console.error("Target page found:", targetPage.title);
-      console.error("Page ID:", targetPage.id);
-      
-      try {
-        const url = `https://graph.microsoft.com/v1.0/me/onenote/pages/${targetPage.id}/content`;
-        console.error("Fetching content from:", url);
-        
-        // Make direct HTTP request with fetch
-        const response = await fetch(url, {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error(`HTTP error! Status: ${response.status} ${response.statusText}`);
-        }
-        
-        const content = await response.text();
-        console.error(`Content received! Length: ${content.length} characters`);
-        
-        // Return the raw HTML content
-        return {
-          content: [
-            {
-              type: "text",
-              text: content
-            }
-          ]
-        };
-      } catch (error) {
-        console.error("Error getting content:", error);
-        
-        // Return a simple error message
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error retrieving page content: ${error.message}`
-            }
-          ]
-        };
-      }
+      const content = await response.text();
+      return {
+        content: [
+          { type: "text", text: content }
+        ]
+      };
     } catch (error) {
       console.error("Error in getPage:", error);
       return {
         content: [
-          {
-            type: "text",
-            text: `Error in getPage: ${error.message}`
-          }
+          { type: "text", text: `Error in getPage: ${error.message}` }
         ]
       };
     }

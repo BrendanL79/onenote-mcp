@@ -54,3 +54,14 @@ describe('listPages tool schema', () => {
     assert.ok(props?.sectionId, 'schema should include sectionId');
   });
 });
+
+describe('getPage tool schema', () => {
+  it('advertises a required pageId parameter', async () => {
+    const mod = await import(`../onenote-mcp.mjs?t=${Date.now()}`);
+    const tools = mod.server._registeredTools;
+    const tool = tools.getPage;
+    assert.ok(tool?.inputSchema);
+    const props = tool.inputSchema.def.shape;
+    assert.ok(props?.pageId, 'schema should include pageId');
+  });
+});
