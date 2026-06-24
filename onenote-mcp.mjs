@@ -3,76 +3,49 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@microsoft/microsoft-graph-client';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
 import dotenv from 'dotenv';
-import { fileURLToPath } from 'url';
-import path from 'path';
-import fs from 'fs';
 import fetch from 'node-fetch';
 
-// Load environment variables
+import {
+  saveToken,
+  loadToken,
+  refreshAccessToken,
+  isTokenExpired,
+  setTokenEndpointConfig,
+} from './token-store.mjs';
+
 dotenv.config();
 
-// Get the current file's directory
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Path for storing the access token
-const tokenFilePath = path.join(__dirname, '.access-token.txt');
-
-// Create the MCP server
 const server = new McpServer(
-  { 
-    name: "onenote",
-    version: "1.0.0",
-    description: "OneNote MCP Server" 
-  },
-  {
-    capabilities: {
-      tools: {
-        listChanged: true
-      }
-    }
-  }
+  { name: "onenote", version: "1.0.0", description: "OneNote MCP Server" },
+  { capabilities: { tools: { listChanged: true } } }
 );
 
-// Try to read the stored access token
-let accessToken = null;
-try {
-  if (fs.existsSync(tokenFilePath)) {
-    const tokenData = fs.readFileSync(tokenFilePath, 'utf8');
-    try {
-      // Try to parse as JSON first (new format)
-      const parsedToken = JSON.parse(tokenData);
-      accessToken = parsedToken.token;
-    } catch (parseError) {
-      // Fall back to using the raw token (old format)
-      accessToken = tokenData;
-    }
-  }
-} catch (error) {
-  console.error('Error reading access token file:', error.message);
-}
+const clientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e';
+const TENANT = process.env.GRAPH_TENANT || 'common';
+const SCOPES = 'Notes.ReadWrite Notes.Create User.Read offline_access';
 
-// Alternatively, check if token is in environment variables
+setTokenEndpointConfig({ clientId, tenant: TENANT, scopes: SCOPES });
+
+let storedToken = loadToken();
+let accessToken = storedToken ? storedToken.token : null;
 if (!accessToken && process.env.GRAPH_ACCESS_TOKEN) {
   accessToken = process.env.GRAPH_ACCESS_TOKEN;
 }
 
 let graphClient = null;
-let pendingDeviceCode = null; // { device_code, interval, expires_in, startTime }
+let pendingDeviceCode = null;
 
 // Client ID — Microsoft Graph Explorer (public client, pre-consented for all Graph scopes)
-const clientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e';
 // 'common' accepts BOTH personal Microsoft accounts (MSA) and work/school (Azure AD) accounts.
 // Override with GRAPH_TENANT for a locked single-tenant flow:
 //   'consumers'     -> personal MSA only
 //   'organizations' -> work/school only
 //   '<tenant-id>'   -> one specific org
-const TENANT = process.env.GRAPH_TENANT || 'common';
 // Non-".All" delegated scopes work for both personal and work/school accounts.
 // (Personal MSA cannot be granted the ".All" variants at all; ".All" only adds
 // access to notebooks the signed-in user does not own.)
-const SCOPES = 'Notes.ReadWrite Notes.Create User.Read offline_access';
 
 function buildGraphClient(token) {
   return Client.initWithMiddleware({
@@ -81,6 +54,18 @@ function buildGraphClient(token) {
 }
 
 async function ensureGraphClient() {
+  if (isTokenExpired() && accessToken) {
+    try {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        accessToken = refreshed.token;
+        graphClient = buildGraphClient(accessToken);
+      }
+    } catch (err) {
+      console.error('Token refresh failed:', err.message);
+    }
+  }
+
   if (graphClient) return graphClient;
 
   if (!accessToken) {
@@ -157,7 +142,11 @@ server.tool(
 
         if (data.access_token) {
           accessToken = data.access_token;
-          fs.writeFileSync(tokenFilePath, JSON.stringify({ token: accessToken }));
+          saveToken({
+            token: data.access_token,
+            refresh_token: data.refresh_token,
+            expires_in: data.expires_in,
+          });
           graphClient = buildGraphClient(accessToken);
           pendingDeviceCode = null;
           return { content: [{ type: "text", text: "Authentication complete. You are now signed in." }] };
@@ -192,19 +181,18 @@ server.tool(
 server.tool(
   "saveAccessToken",
   "Save a Microsoft Graph access token for later use",
-  async (params) => {
+  { token: z.string().describe("The access token to save") },
+  async ({ token }) => {
     try {
-      // Save the token for future use
-      accessToken = params.random_string;
-      const tokenData = JSON.stringify({ token: accessToken });
-      fs.writeFileSync(tokenFilePath, tokenData);
-      await createGraphClient();
-      return { 
+      if (!token || token.length === 0) {
+        throw new Error("Token is required");
+      }
+      accessToken = token;
+      saveToken({ token });
+      graphClient = buildGraphClient(accessToken);
+      return {
         content: [
-          {
-            type: "text",
-            text: "Access token saved successfully"
-          }
+          { type: "text", text: "Access token saved successfully" }
         ]
       };
     } catch (error) {
@@ -548,4 +536,8 @@ async function main() {
   }
 }
 
-main(); 
+export { server };
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+} 
