@@ -272,33 +272,14 @@ server.tool(
 server.tool(
   "listPages",
   "List all pages in a section",
-  async (params) => {
+  { sectionId: z.string().describe("The ID of the section to list pages from") },
+  async ({ sectionId }) => {
     try {
       await ensureGraphClient();
-      // Get sections first
-      const sectionsResponse = await graphClient.api(`/me/onenote/sections`).get();
-      
-      if (sectionsResponse.value.length === 0) {
-        return { 
-          content: [
-            {
-              type: "text",
-              text: "[]"
-            }
-          ]
-        };
-      }
-      
-      // Use the first section
-      const sectionId = sectionsResponse.value[0].id;
       const response = await graphClient.api(`/me/onenote/sections/${sectionId}/pages`).get();
-      
-      return { 
+      return {
         content: [
-          {
-            type: "text",
-            text: JSON.stringify(response.value)
-          }
+          { type: "text", text: JSON.stringify(response.value) }
         ]
       };
     } catch (error) {

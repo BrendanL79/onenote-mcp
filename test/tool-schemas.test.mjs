@@ -43,3 +43,14 @@ describe('listSections tool schema', () => {
     assert.ok(props?.notebookId, 'schema should include notebookId');
   });
 });
+
+describe('listPages tool schema', () => {
+  it('advertises a required sectionId parameter', async () => {
+    const mod = await import(`../onenote-mcp.mjs?t=${Date.now()}`);
+    const tools = mod.server._registeredTools;
+    const tool = tools.listPages;
+    assert.ok(tool?.inputSchema);
+    const props = tool.inputSchema.def.shape;
+    assert.ok(props?.sectionId, 'schema should include sectionId');
+  });
+});
