@@ -65,3 +65,26 @@ describe('getPage tool schema', () => {
     assert.ok(props?.pageId, 'schema should include pageId');
   });
 });
+
+describe('createPage tool schema', () => {
+  it('advertises sectionId and title parameters', async () => {
+    const mod = await import(`../onenote-mcp.mjs?t=${Date.now()}`);
+    const tools = mod.server._registeredTools;
+    const tool = tools.createPage;
+    assert.ok(tool?.inputSchema);
+    const props = tool.inputSchema.def.shape;
+    assert.ok(props?.sectionId, 'schema should include sectionId');
+    assert.ok(props?.title, 'schema should include title');
+  });
+});
+
+describe('searchPages tool schema', () => {
+  it('advertises a query parameter', async () => {
+    const mod = await import(`../onenote-mcp.mjs?t=${Date.now()}`);
+    const tools = mod.server._registeredTools;
+    const tool = tools.searchPages;
+    assert.ok(tool?.inputSchema);
+    const props = tool.inputSchema.def.shape;
+    assert.ok(props?.query, 'schema should include query');
+  });
+});

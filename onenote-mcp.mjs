@@ -325,43 +325,23 @@ server.tool(
 server.tool(
   "createPage",
   "Create a new page in a section",
-  async (params) => {
+  {
+    sectionId: z.string().describe("The ID of the section to create the page in"),
+    title: z.string().describe("The title of the new page"),
+    body: z.string().optional().describe("Optional HTML body content for the page"),
+  },
+  async ({ sectionId, title, body }) => {
     try {
       await ensureGraphClient();
-      // Get sections first
-      const sectionsResponse = await graphClient.api(`/me/onenote/sections`).get();
-      
-      if (sectionsResponse.value.length === 0) {
-        throw new Error("No sections found");
-      }
-      
-      // Use the first section
-      const sectionId = sectionsResponse.value[0].id;
-      
-      // Create simple HTML content
-      const simpleHtml = `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>New Page</title>
-          </head>
-          <body>
-            <p>This is a new page created via the Microsoft Graph API</p>
-          </body>
-        </html>
-      `;
-      
+      const htmlBody = body || '<p></p>';
+      const html = `<!DOCTYPE html><html><head><title>${title}</title></head><body>${htmlBody}</body></html>`;
       const response = await graphClient
         .api(`/me/onenote/sections/${sectionId}/pages`)
         .header("Content-Type", "application/xhtml+xml")
-        .post(simpleHtml);
-      
-      return { 
+        .post(html);
+      return {
         content: [
-          {
-            type: "text",
-            text: JSON.stringify(response)
-          }
+          { type: "text", text: JSON.stringify(response) }
         ]
       };
     } catch (error) {
@@ -374,44 +354,28 @@ server.tool(
 // Tool for searching pages
 server.tool(
   "searchPages",
-  "Search for pages across notebooks",
-  async (params) => {
+  "Search for pages across notebooks by title",
+  { query: z.string().describe("Search term to filter pages by title") },
+  async ({ query }) => {
     try {
       await ensureGraphClient();
-      
-      // Get all pages
       const response = await graphClient.api(`/me/onenote/pages`).get();
-      
-      // If search string is provided, filter the results
-      if (params.random_string && params.random_string.length > 0) {
-        const searchTerm = params.random_string.toLowerCase();
-        const filteredPages = response.value.filter(page => {
-          // Search in title
-          if (page.title && page.title.toLowerCase().includes(searchTerm)) {
-            return true;
-          }
-          return false;
-        });
-        
-        return { 
+      if (!query || query.length === 0) {
+        return {
           content: [
-            {
-              type: "text",
-              text: JSON.stringify(filteredPages)
-            }
-          ]
-        };
-      } else {
-        // Return all pages if no search term
-        return { 
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(response.value)
-            }
+            { type: "text", text: JSON.stringify(response.value) }
           ]
         };
       }
+      const searchTerm = query.toLowerCase();
+      const filteredPages = response.value.filter(page =>
+        page.title && page.title.toLowerCase().includes(searchTerm)
+      );
+      return {
+        content: [
+          { type: "text", text: JSON.stringify(filteredPages) }
+        ]
+      };
     } catch (error) {
       console.error("Error searching pages:", error);
       throw new Error(`Failed to search pages: ${error.message}`);
