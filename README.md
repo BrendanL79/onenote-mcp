@@ -189,16 +189,31 @@ Set it in your MCP server config's `env` block, for example:
 
 Once authenticated, the following tools are available for AI assistants to use:
 
-| Tool Name | Description |
-|-----------|-------------|
-| `authenticate` | Start the Microsoft authentication flow |
-| `listNotebooks` | Get a list of all your OneNote notebooks |
-| `getNotebook` | Get details of a specific notebook |
-| `listSections` | List all sections in a notebook |
-| `listPages` | List all pages in a section |
-| `getPage` | Get the complete content of a specific page, including HTML formatting |
-| `createPage` | Create a new page with HTML content |
-| `searchPages` | Search for pages across your notebooks |
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `authenticate` | Start device-code auth flow | None |
+| `saveAccessToken` | Save a pre-obtained access token | `token` (string, required) |
+| `listNotebooks` | List all notebooks | None |
+| `getNotebook` | Get a specific notebook | `notebookId` (string, required) |
+| `listSections` | List sections, optionally scoped | `notebookId` (string, optional) |
+| `listPages` | List pages in a section | `sectionId` (string, required), `top` (number, optional, default 100), `skip` (number, optional, default 0) |
+| `getPage` | Get page content by ID | `pageId` (string, required) |
+| `createPage` | Create a new page | `sectionId` (string, required), `title` (string, required), `body` (string, optional) |
+| `searchPages` | Search pages by title | `query` (string, required), `top` (number, optional, default 100), `skip` (number, optional, default 0) |
+
+### Token Refresh
+
+The server automatically persists the `refresh_token` and `expires_at` alongside
+the access token. When the access token is within 5 minutes of expiry, the next
+tool call will silently refresh the token using the stored refresh token — no
+manual re-authentication is needed.
+
+### Pagination
+
+`listPages` and `searchPages` accept optional `top` (max 100) and `skip`
+parameters. When called with their defaults (`top=100`, `skip=0`), they loop
+through the OneNote API with `$top=100` and `$skip` increments until all pages
+are fetched, so notebooks with more than 100 pages won't silently truncate.
 
 ## Example Interactions
 
