@@ -6,6 +6,9 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
+import { fileURLToPath } from 'url';
+import { realpathSync } from 'node:fs';
+import path from 'node:path';
 
 import {
   saveToken,
@@ -88,28 +91,6 @@ async function startDeviceCodeFlow() {
   const data = await res.json();
   if (data.error) throw new Error(`${data.error}: ${data.error_description}`);
   return data;
-}
-
-// Poll for token after user completes device code sign-in
-async function pollForToken(deviceCode, intervalSecs) {
-  const body = new URLSearchParams({
-    grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-    client_id: clientId,
-    device_code: deviceCode,
-  }).toString();
-
-  while (true) {
-    await new Promise(r => setTimeout(r, intervalSecs * 1000));
-    const res = await fetch(
-      `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`,
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }
-    );
-    const data = await res.json();
-    if (data.access_token) return data.access_token;
-    if (data.error === 'authorization_pending') continue;
-    if (data.error === 'slow_down') { intervalSecs += 5; continue; }
-    throw new Error(`${data.error}: ${data.error_description}`);
-  }
 }
 
 export async function fetchAllPages(graphClient, basePath, top) {
@@ -365,7 +346,13 @@ server.tool(
     try {
       await ensureGraphClient();
       const htmlBody = body || '<p></p>';
-      const html = `<!DOCTYPE html><html><head><title>${title}</title></head><body>${htmlBody}</body></html>`;
+      const escapedTitle = title
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+      const html = `<!DOCTYPE html><html><head><title>${escapedTitle}</title></head><body>${htmlBody}</body></html>`;
       const response = await graphClient
         .api(`/me/onenote/sections/${sectionId}/pages`)
         .header("Content-Type", "application/xhtml+xml")
@@ -451,6 +438,16 @@ async function main() {
 
 export { server };
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url))
+      === realpathSync(path.resolve(process.argv[1]));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   main();
 } 

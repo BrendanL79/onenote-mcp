@@ -69,7 +69,7 @@ export async function refreshAccessToken() {
     scope: endpointConfig.scopes,
   }).toString();
 
-  const res = await globalThis.fetch(
+  const res = await (globalThis.fetch || fetch)(
     `https://login.microsoftonline.com/${endpointConfig.tenant}/oauth2/v2.0/token`,
     { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }
   );
@@ -78,9 +78,15 @@ export async function refreshAccessToken() {
 
   saveToken({
     token: data.access_token,
-    refresh_token: data.refresh_token,
     expires_in: data.expires_in,
   });
+  if (data.refresh_token) {
+    saveToken({
+      token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_in: data.expires_in,
+    });
+  }
 
   return loadToken();
 }

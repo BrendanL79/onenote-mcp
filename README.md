@@ -92,7 +92,7 @@ The first time you ask about OneNote, the AI will guide you through the authenti
 
 ### Prerequisites
 
-- Node.js 16 or higher (install from [nodejs.org](https://nodejs.org/))
+- Node.js 18 or higher (install from [nodejs.org](https://nodejs.org/))
 - An active Microsoft account with access to OneNote
 - Git (install from [git-scm.com](https://git-scm.com/))
 

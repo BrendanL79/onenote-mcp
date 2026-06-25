@@ -15,7 +15,6 @@
   },
   "dependencies": {
     "@azure/identity": "^4.13.1",
-    "@azure/msal-node": "^5.2.5",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@modelcontextprotocol/sdk": "^1.25.2",
     "dotenv": "^16.0.0",
@@ -30,5 +29,8 @@
     "device-code-auth"
   ],
   "author": "Zubeid Hendricks",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
