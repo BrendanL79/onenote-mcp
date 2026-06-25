@@ -79,7 +79,7 @@ The first time you ask about OneNote, the AI will guide you through the authenti
 
 ## Features
 
-- Authentication with Microsoft OneNote using device code flow (no Azure setup needed)
+- Authentication with Microsoft OneNote using device code flow (no Azure setup needed), supporting both personal and work/school accounts
 - List all notebooks, sections, and pages
 - Create new pages with HTML content
 - Read complete page content, including HTML formatting
@@ -92,7 +92,7 @@ The first time you ask about OneNote, the AI will guide you through the authenti
 
 ### Prerequisites
 
-- Node.js 16 or higher (install from [nodejs.org](https://nodejs.org/))
+- Node.js 18 or higher (install from [nodejs.org](https://nodejs.org/))
 - An active Microsoft account with access to OneNote
 - Git (install from [git-scm.com](https://git-scm.com/))
 
@@ -151,20 +151,69 @@ Once the server is running, you can authenticate directly through your AI assist
 
 4. After successful authentication, you can start using OneNote with your AI assistant
 
+### Account Types and Tenant Configuration
+
+By default the server authenticates against the Microsoft `common` tenant, which
+accepts **both** personal Microsoft accounts (MSA) and work/school (Azure AD)
+accounts — no configuration needed for the typical case.
+
+If you need to restrict sign-in to a specific tenant, set the `GRAPH_TENANT`
+environment variable:
+
+| `GRAPH_TENANT` value | Accounts allowed |
+|----------------------|------------------|
+| `common` (default)   | Personal **and** work/school |
+| `consumers`          | Personal Microsoft accounts only |
+| `organizations`      | Work/school accounts only |
+| `<tenant-id>`        | A single specific organization |
+
+Set it in your MCP server config's `env` block, for example:
+
+```json
+{
+  "mcpServers": {
+    "onenote": {
+      "command": "node",
+      "args": ["/absolute/path/to/your/onenote-mcp.mjs"],
+      "env": { "GRAPH_TENANT": "organizations" }
+    }
+  }
+}
+```
+
+> Note: some organizations disable user consent for third-party apps, requiring
+> an administrator to approve access. This is a tenant policy and cannot be
+> changed from this server.
+
 ## Available MCP Tools
 
 Once authenticated, the following tools are available for AI assistants to use:
 
-| Tool Name | Description |
-|-----------|-------------|
-| `authenticate` | Start the Microsoft authentication flow |
-| `listNotebooks` | Get a list of all your OneNote notebooks |
-| `getNotebook` | Get details of a specific notebook |
-| `listSections` | List all sections in a notebook |
-| `listPages` | List all pages in a section |
-| `getPage` | Get the complete content of a specific page, including HTML formatting |
-| `createPage` | Create a new page with HTML content |
-| `searchPages` | Search for pages across your notebooks |
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `authenticate` | Start device-code auth flow | None |
+| `saveAccessToken` | Save a pre-obtained access token | `token` (string, required) |
+| `listNotebooks` | List all notebooks | None |
+| `getNotebook` | Get a specific notebook | `notebookId` (string, required) |
+| `listSections` | List sections, optionally scoped | `notebookId` (string, optional) |
+| `listPages` | List pages in a section | `sectionId` (string, required), `top` (number, optional, default 100), `skip` (number, optional, default 0) |
+| `getPage` | Get page content by ID | `pageId` (string, required) |
+| `createPage` | Create a new page | `sectionId` (string, required), `title` (string, required), `body` (string, optional) |
+| `searchPages` | Search pages by title | `query` (string, required), `top` (number, optional, default 100), `skip` (number, optional, default 0) |
+
+### Token Refresh
+
+The server automatically persists the `refresh_token` and `expires_at` alongside
+the access token. When the access token is within 5 minutes of expiry, the next
+tool call will silently refresh the token using the stored refresh token — no
+manual re-authentication is needed.
+
+### Pagination
+
+`listPages` and `searchPages` accept optional `top` (max 100) and `skip`
+parameters. When called with their defaults (`top=100`, `skip=0`), they loop
+through the OneNote API with `$top=100` and `$skip` increments until all pages
+are fetched, so notebooks with more than 100 pages won't silently truncate.
 
 ## Example Interactions
 

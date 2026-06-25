@@ -1,177 +1,173 @@
 #!/usr/bin/env node
 
-import { McpServer } from './typescript-sdk/dist/esm/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@microsoft/microsoft-graph-client';
-import { StdioServerTransport } from './typescript-sdk/dist/esm/server/stdio.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
 import dotenv from 'dotenv';
-import { fileURLToPath } from 'url';
-import path from 'path';
-import fs from 'fs';
-import { DeviceCodeCredential } from '@azure/identity';
 import fetch from 'node-fetch';
+import { fileURLToPath } from 'url';
+import { realpathSync } from 'node:fs';
+import path from 'node:path';
 
-// Load environment variables
+import {
+  saveToken,
+  loadToken,
+  refreshAccessToken,
+  isTokenExpired,
+  setTokenEndpointConfig,
+} from './token-store.mjs';
+
 dotenv.config();
 
-// Get the current file's directory
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Path for storing the access token
-const tokenFilePath = path.join(__dirname, '.access-token.txt');
-
-// Create the MCP server
 const server = new McpServer(
-  { 
-    name: "onenote",
-    version: "1.0.0",
-    description: "OneNote MCP Server" 
-  },
-  {
-    capabilities: {
-      tools: {
-        listChanged: true
-      }
-    }
-  }
+  { name: "onenote", version: "1.0.0", description: "OneNote MCP Server" },
+  { capabilities: { tools: { listChanged: true } } }
 );
 
-// Try to read the stored access token
-let accessToken = null;
-try {
-  if (fs.existsSync(tokenFilePath)) {
-    const tokenData = fs.readFileSync(tokenFilePath, 'utf8');
-    try {
-      // Try to parse as JSON first (new format)
-      const parsedToken = JSON.parse(tokenData);
-      accessToken = parsedToken.token;
-    } catch (parseError) {
-      // Fall back to using the raw token (old format)
-      accessToken = tokenData;
-    }
-  }
-} catch (error) {
-  console.error('Error reading access token file:', error.message);
-}
+const clientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e';
+const TENANT = process.env.GRAPH_TENANT || 'common';
+const SCOPES = 'Notes.ReadWrite Notes.Create User.Read offline_access';
 
-// Alternatively, check if token is in environment variables
+setTokenEndpointConfig({ clientId, tenant: TENANT, scopes: SCOPES });
+
+let storedToken = loadToken();
+let accessToken = storedToken ? storedToken.token : null;
 if (!accessToken && process.env.GRAPH_ACCESS_TOKEN) {
   accessToken = process.env.GRAPH_ACCESS_TOKEN;
 }
 
 let graphClient = null;
+let pendingDeviceCode = null;
 
-// Client ID for Microsoft Graph API access
-const clientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e'; // Microsoft Graph Explorer client ID
-const scopes = ['Notes.Read.All', 'Notes.ReadWrite.All', 'User.Read'];
+// Client ID — Microsoft Graph Explorer (public client, pre-consented for all Graph scopes)
+// 'common' accepts BOTH personal Microsoft accounts (MSA) and work/school (Azure AD) accounts.
+// Override with GRAPH_TENANT for a locked single-tenant flow:
+//   'consumers'     -> personal MSA only
+//   'organizations' -> work/school only
+//   '<tenant-id>'   -> one specific org
+// Non-".All" delegated scopes work for both personal and work/school accounts.
+// (Personal MSA cannot be granted the ".All" variants at all; ".All" only adds
+// access to notebooks the signed-in user does not own.)
 
-// Function to ensure Graph client is created
+function buildGraphClient(token) {
+  return Client.initWithMiddleware({
+    authProvider: { getAccessToken: async () => token }
+  });
+}
+
 async function ensureGraphClient() {
-  if (!graphClient) {
-    // Read token from file if it exists
+  if (isTokenExpired() && accessToken) {
     try {
-      if (fs.existsSync(tokenFilePath)) {
-        const tokenData = fs.readFileSync(tokenFilePath, 'utf8');
-        try {
-          // Try to parse as JSON first (new format)
-          const parsedToken = JSON.parse(tokenData);
-          accessToken = parsedToken.token;
-        } catch (parseError) {
-          // Fall back to using the raw token (old format)
-          accessToken = tokenData;
-        }
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        accessToken = refreshed.token;
+        graphClient = buildGraphClient(accessToken);
       }
-    } catch (error) {
-      console.error("Error reading token file:", error);
+    } catch (err) {
+      console.error('Token refresh failed:', err.message);
     }
-
-    if (!accessToken) {
-      throw new Error("Access token not found. Please save access token first.");
-    }
-
-    // Create Microsoft Graph client
-    graphClient = Client.init({
-      authProvider: (done) => {
-        done(null, accessToken);
-      }
-    });
   }
+
+  if (graphClient) return graphClient;
+
+  if (!accessToken) {
+    throw new Error("Not authenticated. Call the authenticate tool first.");
+  }
+  graphClient = buildGraphClient(accessToken);
   return graphClient;
 }
 
-// Create graph client with device code auth or access token
-async function createGraphClient() {
-  if (accessToken) {
-    // Use access token if available
-    graphClient = Client.initWithMiddleware({
-      authProvider: {
-        getAccessToken: async () => {
-          return accessToken;
-        }
-      }
-    });
-    return { type: 'token', client: graphClient };
-  } else {
-    // Use device code flow
-    const credential = new DeviceCodeCredential({
-      clientId: clientId,
-      userPromptCallback: (info) => {
-        // This will be shown to the user with the URL and code
-        console.error('\n' + info.message);
-      }
-    });
-
-    try {
-      // Get an access token using device code flow
-      const tokenResponse = await credential.getToken(scopes);
-      
-      // Save the token for future use
-      accessToken = tokenResponse.token;
-      fs.writeFileSync(tokenFilePath, JSON.stringify({ token: accessToken }));
-      
-      // Initialize Graph client with the token
-      graphClient = Client.initWithMiddleware({
-        authProvider: {
-          getAccessToken: async () => {
-            return accessToken;
-          }
-        }
-      });
-      
-      return { type: 'device_code', client: graphClient };
-    } catch (error) {
-      console.error('Authentication error:', error);
-      throw new Error(`Authentication failed: ${error.message}`);
+// Start device code flow; returns { user_code, verification_uri, message, device_code, interval }
+async function startDeviceCodeFlow() {
+  const res = await fetch(
+    `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/devicecode`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: clientId, scope: SCOPES }).toString(),
     }
+  );
+  const data = await res.json();
+  if (data.error) throw new Error(`${data.error}: ${data.error_description}`);
+  return data;
+}
+
+export async function fetchAllPages(graphClient, basePath, top) {
+  const all = [];
+  let skip = 0;
+  while (true) {
+    const response = await graphClient
+      .api(basePath)
+      .query({ $top: top, $skip: skip })
+      .get();
+    if (!response.value || response.value.length === 0) break;
+    all.push(...response.value);
+    if (response.value.length < top) break;
+    skip += top;
   }
+  return all;
 }
 
 // Tool for starting authentication flow
 server.tool(
   "authenticate",
   "Start the authentication flow with Microsoft Graph",
+  {},
   async () => {
     try {
-      const result = await createGraphClient();
-      if (result.type === 'device_code') {
-        return { 
-          content: [
-            {
-              type: "text",
-              text: "Authentication started. Please check the console for the URL and code."
-            }
-          ]
-        };
-      } else {
-        return { 
-          content: [
-            {
-              type: "text",
-              text: "Already authenticated with an access token."
-            }
-          ]
-        };
+      // If already authenticated, confirm
+      if (accessToken) {
+        return { content: [{ type: "text", text: "Already authenticated with an access token." }] };
       }
+
+      // If a device code flow is in progress, poll once to check if user completed sign-in
+      if (pendingDeviceCode) {
+        const { device_code, interval } = pendingDeviceCode;
+        const res = await fetch(
+          `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+              client_id: clientId,
+              device_code: device_code,
+            }).toString(),
+          }
+        );
+        const data = await res.json();
+
+        if (data.access_token) {
+          accessToken = data.access_token;
+          saveToken({
+            token: data.access_token,
+            refresh_token: data.refresh_token,
+            expires_in: data.expires_in,
+          });
+          graphClient = buildGraphClient(accessToken);
+          pendingDeviceCode = null;
+          return { content: [{ type: "text", text: "Authentication complete. You are now signed in." }] };
+        }
+
+        if (data.error === 'authorization_pending' || data.error === 'slow_down') {
+          return { content: [{ type: "text", text: "Authentication in progress. Complete the sign-in in your browser, then call authenticate again to confirm." }] };
+        }
+
+        // Flow expired or errored — reset and start fresh
+        pendingDeviceCode = null;
+      }
+
+      // Start a new device code flow
+      const flowData = await startDeviceCodeFlow();
+      pendingDeviceCode = { device_code: flowData.device_code, interval: flowData.interval };
+
+      return {
+        content: [{
+          type: "text",
+          text: flowData.message + "\n\nAfter completing sign-in, call the authenticate tool again to confirm."
+        }]
+      };
     } catch (error) {
       console.error("Error in authentication:", error);
       throw new Error(`Authentication failed: ${error.message}`);
@@ -183,19 +179,18 @@ server.tool(
 server.tool(
   "saveAccessToken",
   "Save a Microsoft Graph access token for later use",
-  async (params) => {
+  { token: z.string().describe("The access token to save") },
+  async ({ token }) => {
     try {
-      // Save the token for future use
-      accessToken = params.random_string;
-      const tokenData = JSON.stringify({ token: accessToken });
-      fs.writeFileSync(tokenFilePath, tokenData);
-      await createGraphClient();
-      return { 
+      if (!token || token.length === 0) {
+        throw new Error("Token is required");
+      }
+      accessToken = token;
+      saveToken({ token });
+      graphClient = buildGraphClient(accessToken);
+      return {
         content: [
-          {
-            type: "text",
-            text: "Access token saved successfully"
-          }
+          { type: "text", text: "Access token saved successfully" }
         ]
       };
     } catch (error) {
@@ -209,17 +204,14 @@ server.tool(
 server.tool(
   "listNotebooks",
   "List all OneNote notebooks",
-  async (params) => {
+  {},
+  async () => {
     try {
       await ensureGraphClient();
       const response = await graphClient.api("/me/onenote/notebooks").get();
-      // Return content as an array of text items
       return {
         content: [
-          {
-            type: "text",
-            text: JSON.stringify(response.value)
-          }
+          { type: "text", text: JSON.stringify(response.value) }
         ]
       };
     } catch (error) {
@@ -233,16 +225,14 @@ server.tool(
 server.tool(
   "getNotebook",
   "Get details of a specific notebook",
-  async (params) => {
+  { notebookId: z.string().describe("The ID of the notebook to retrieve") },
+  async ({ notebookId }) => {
     try {
       await ensureGraphClient();
-      const response = await graphClient.api(`/me/onenote/notebooks`).get();
-      return { 
+      const response = await graphClient.api(`/me/onenote/notebooks/${notebookId}`).get();
+      return {
         content: [
-          {
-            type: "text",
-            text: JSON.stringify(response.value[0])
-          }
+          { type: "text", text: JSON.stringify(response) }
         ]
       };
     } catch (error) {
@@ -255,17 +245,18 @@ server.tool(
 // Tool for listing sections in a notebook
 server.tool(
   "listSections",
-  "List all sections in a notebook",
-  async (params) => {
+  "List all sections, optionally scoped to a notebook",
+  { notebookId: z.string().optional().describe("Optional notebook ID to scope sections to a specific notebook") },
+  async ({ notebookId }) => {
     try {
       await ensureGraphClient();
-      const response = await graphClient.api(`/me/onenote/sections`).get();
-      return { 
+      const api = notebookId
+        ? graphClient.api(`/me/onenote/notebooks/${notebookId}/sections`)
+        : graphClient.api(`/me/onenote/sections`);
+      const response = await api.get();
+      return {
         content: [
-          {
-            type: "text",
-            text: JSON.stringify(response.value)
-          }
+          { type: "text", text: JSON.stringify(response.value) }
         ]
       };
     } catch (error) {
@@ -279,33 +270,28 @@ server.tool(
 server.tool(
   "listPages",
   "List all pages in a section",
-  async (params) => {
+  {
+    sectionId: z.string().describe("The ID of the section to list pages from"),
+    top: z.number().int().min(1).max(100).optional().default(100).describe("Page size for pagination (max 100)"),
+    skip: z.number().int().min(0).optional().default(0).describe("Number of items to skip"),
+  },
+  async ({ sectionId, top, skip }) => {
     try {
       await ensureGraphClient();
-      // Get sections first
-      const sectionsResponse = await graphClient.api(`/me/onenote/sections`).get();
-      
-      if (sectionsResponse.value.length === 0) {
-        return { 
-          content: [
-            {
-              type: "text",
-              text: "[]"
-            }
-          ]
-        };
+      const basePath = `/me/onenote/sections/${sectionId}/pages`;
+      let pages;
+      if (skip === 0 && top === 100) {
+        pages = await fetchAllPages(graphClient, basePath, 100);
+      } else {
+        const response = await graphClient
+          .api(basePath)
+          .query({ $top: top, $skip: skip })
+          .get();
+        pages = response.value;
       }
-      
-      // Use the first section
-      const sectionId = sectionsResponse.value[0].id;
-      const response = await graphClient.api(`/me/onenote/sections/${sectionId}/pages`).get();
-      
-      return { 
+      return {
         content: [
-          {
-            type: "text",
-            text: JSON.stringify(response.value)
-          }
+          { type: "text", text: JSON.stringify(pages) }
         ]
       };
     } catch (error) {
@@ -318,102 +304,29 @@ server.tool(
 // Tool for getting the content of a page
 server.tool(
   "getPage",
-  "Get the content of a page",
-  async (params) => {
+  "Get the content of a page by its ID",
+  { pageId: z.string().describe("The ID of the page to retrieve") },
+  async ({ pageId }) => {
     try {
-      console.error("GetPage called with params:", params);
       await ensureGraphClient();
-      
-      // First, list all pages to find the one we want
-      const pagesResponse = await graphClient.api('/me/onenote/pages').get();
-      console.error("Got", pagesResponse.value.length, "pages");
-      
-      let targetPage;
-      
-      // If a page ID is provided, use it to find the page
-      if (params.random_string && params.random_string.length > 0) {
-        const pageId = params.random_string;
-        console.error("Looking for page with ID:", pageId);
-        
-        // Look for exact match first
-        targetPage = pagesResponse.value.find(p => p.id === pageId);
-        
-        // If no exact match, try matching by title
-        if (!targetPage) {
-          console.error("No exact match, trying title search");
-          targetPage = pagesResponse.value.find(p => 
-            p.title && p.title.toLowerCase().includes(params.random_string.toLowerCase())
-          );
-        }
-        
-        // If still no match, try partial ID match
-        if (!targetPage) {
-          console.error("No title match, trying partial ID match");
-          targetPage = pagesResponse.value.find(p => 
-            p.id.includes(pageId) || pageId.includes(p.id)
-          );
-        }
-      } else {
-        // If no ID provided, use the first page
-        console.error("No ID provided, using first page");
-        targetPage = pagesResponse.value[0];
+      const url = `https://graph.microsoft.com/v1.0/me/onenote/pages/${pageId}/content`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status} ${response.statusText}`);
       }
-      
-      if (!targetPage) {
-        throw new Error("Page not found");
-      }
-      
-      console.error("Target page found:", targetPage.title);
-      console.error("Page ID:", targetPage.id);
-      
-      try {
-        const url = `https://graph.microsoft.com/v1.0/me/onenote/pages/${targetPage.id}/content`;
-        console.error("Fetching content from:", url);
-        
-        // Make direct HTTP request with fetch
-        const response = await fetch(url, {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error(`HTTP error! Status: ${response.status} ${response.statusText}`);
-        }
-        
-        const content = await response.text();
-        console.error(`Content received! Length: ${content.length} characters`);
-        
-        // Return the raw HTML content
-        return {
-          content: [
-            {
-              type: "text",
-              text: content
-            }
-          ]
-        };
-      } catch (error) {
-        console.error("Error getting content:", error);
-        
-        // Return a simple error message
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error retrieving page content: ${error.message}`
-            }
-          ]
-        };
-      }
+      const content = await response.text();
+      return {
+        content: [
+          { type: "text", text: content }
+        ]
+      };
     } catch (error) {
       console.error("Error in getPage:", error);
       return {
         content: [
-          {
-            type: "text",
-            text: `Error in getPage: ${error.message}`
-          }
+          { type: "text", text: `Error in getPage: ${error.message}` }
         ]
       };
     }
@@ -424,43 +337,29 @@ server.tool(
 server.tool(
   "createPage",
   "Create a new page in a section",
-  async (params) => {
+  {
+    sectionId: z.string().describe("The ID of the section to create the page in"),
+    title: z.string().describe("The title of the new page"),
+    body: z.string().optional().describe("Optional HTML body content for the page"),
+  },
+  async ({ sectionId, title, body }) => {
     try {
       await ensureGraphClient();
-      // Get sections first
-      const sectionsResponse = await graphClient.api(`/me/onenote/sections`).get();
-      
-      if (sectionsResponse.value.length === 0) {
-        throw new Error("No sections found");
-      }
-      
-      // Use the first section
-      const sectionId = sectionsResponse.value[0].id;
-      
-      // Create simple HTML content
-      const simpleHtml = `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>New Page</title>
-          </head>
-          <body>
-            <p>This is a new page created via the Microsoft Graph API</p>
-          </body>
-        </html>
-      `;
-      
+      const htmlBody = body || '<p></p>';
+      const escapedTitle = title
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+      const html = `<!DOCTYPE html><html><head><title>${escapedTitle}</title></head><body>${htmlBody}</body></html>`;
       const response = await graphClient
         .api(`/me/onenote/sections/${sectionId}/pages`)
         .header("Content-Type", "application/xhtml+xml")
-        .post(simpleHtml);
-      
-      return { 
+        .post(html);
+      return {
         content: [
-          {
-            type: "text",
-            text: JSON.stringify(response)
-          }
+          { type: "text", text: JSON.stringify(response) }
         ]
       };
     } catch (error) {
@@ -473,44 +372,42 @@ server.tool(
 // Tool for searching pages
 server.tool(
   "searchPages",
-  "Search for pages across notebooks",
-  async (params) => {
+  "Search for pages across notebooks by title",
+  {
+    query: z.string().describe("Search term to filter pages by title"),
+    top: z.number().int().min(1).max(100).optional().default(100).describe("Page size for pagination (max 100)"),
+    skip: z.number().int().min(0).optional().default(0).describe("Number of items to skip"),
+  },
+  async ({ query, top, skip }) => {
     try {
       await ensureGraphClient();
-      
-      // Get all pages
-      const response = await graphClient.api(`/me/onenote/pages`).get();
-      
-      // If search string is provided, filter the results
-      if (params.random_string && params.random_string.length > 0) {
-        const searchTerm = params.random_string.toLowerCase();
-        const filteredPages = response.value.filter(page => {
-          // Search in title
-          if (page.title && page.title.toLowerCase().includes(searchTerm)) {
-            return true;
-          }
-          return false;
-        });
-        
-        return { 
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(filteredPages)
-            }
-          ]
-        };
+      const basePath = `/me/onenote/pages`;
+      let allPages;
+      if (skip === 0 && top === 100) {
+        allPages = await fetchAllPages(graphClient, basePath, 100);
       } else {
-        // Return all pages if no search term
-        return { 
+        const response = await graphClient
+          .api(basePath)
+          .query({ $top: top, $skip: skip })
+          .get();
+        allPages = response.value;
+      }
+      if (!query || query.length === 0) {
+        return {
           content: [
-            {
-              type: "text",
-              text: JSON.stringify(response.value)
-            }
+            { type: "text", text: JSON.stringify(allPages) }
           ]
         };
       }
+      const searchTerm = query.toLowerCase();
+      const filteredPages = allPages.filter(page =>
+        page.title && page.title.toLowerCase().includes(searchTerm)
+      );
+      return {
+        content: [
+          { type: "text", text: JSON.stringify(filteredPages) }
+        ]
+      };
     } catch (error) {
       console.error("Error searching pages:", error);
       throw new Error(`Failed to search pages: ${error.message}`);
@@ -539,4 +436,18 @@ async function main() {
   }
 }
 
-main(); 
+export { server };
+
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url))
+      === realpathSync(path.resolve(process.argv[1]));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  main();
+} 
